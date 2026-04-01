@@ -176,17 +176,38 @@ Mount **`/app/data`** for a persistent SQLite file in production.
 
 ## Deploy (Fly.io)
 
-`fly.toml` is included. Outline:
+### Hosting without putting API keys in Git
+
+You do **not** need to clone the repo on a server with secrets in a file.
+
+- **`.env` is git-ignored** and listed in **`.dockerignore`**, so it is **not** copied into the Docker image when you build.
+- **`GEMINI_API_KEY` and `JWT_SECRET`** should be set only as **Fly secrets** (encrypted on Fly’s side), not in GitHub and not in the image.
+- **`fly deploy`** runs from **your laptop**: it uploads the build context (code without `.env`) and runs the Dockerfile. Runtime reads **`process.env`** from Fly’s environment, which includes your secrets.
+
+Example (run once per app; replace the URL with your real `https://<app>.fly.dev`):
+
+```bash
+fly secrets set \
+  JWT_SECRET="$(openssl rand -hex 48)" \
+  GEMINI_API_KEY="your-key-here" \
+  ALLOWED_ORIGIN="https://your-app.fly.dev" \
+  TRUST_PROXY=1 \
+  APP_PUBLIC_URL="https://your-app.fly.dev"
+```
+
+Optional helper from the project root: `./scripts/deploy-fly.sh` (runs `fly deploy` after you have set secrets).
+
+### Steps
 
 1. [Install `flyctl`](https://fly.io/docs/hands-on/install-flyctl/) and `fly auth login`.
-2. Set a unique `app` name in `fly.toml`.
+2. Set a unique `app` name in `fly.toml` (must be globally unique on Fly).
 3. `fly volumes create sd_data --region iad --size 1` (match your `primary_region`).
-4. `fly secrets set` for `JWT_SECRET`, `GEMINI_API_KEY`, `NODE_ENV=production`, `ALLOWED_ORIGIN`, `TRUST_PROXY=1`, `APP_PUBLIC_URL`, plus email vars for reset mail.
-5. `fly deploy`.
+4. `fly secrets set` as above (plus email vars for password reset if you use them).
+5. From this directory: `fly deploy`.
 
 Use **`TRUST_PROXY=1`** when the app sits behind Fly’s edge so client IP limits work correctly.
 
-Other platforms: run the same image with a **persistent disk** on `/app/data` and set `PORT` as required.
+Other platforms: run the same image with a **persistent disk** on `/app/data` and inject secrets via **that platform’s secret manager**, not the repo.
 
 ---
 
@@ -210,6 +231,7 @@ Other platforms: run the same image with a **persistent disk** on `/app/data` an
 ├── tsconfig*.json
 ├── Dockerfile
 ├── fly.toml
+├── scripts/deploy-fly.sh
 ├── .env.example
 ├── src/
 │   ├── App.tsx
