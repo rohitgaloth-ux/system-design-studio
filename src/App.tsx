@@ -14,6 +14,7 @@ import {
 } from "react";
 import { Input } from "./components/Input";
 import { Skeleton } from "./components/Skeleton";
+import { apiUrl } from "./lib/apiBase";
 import { createFallbackDesign, generateMarkdown, hasMeaningfulDesign } from "./lib/design";
 import type { NormalizedDesign } from "./types/design";
 import "./index.css";
@@ -91,7 +92,7 @@ async function fetchDesigns(): Promise<DesignHistoryEntry[]> {
   const t = loadToken();
   if (!t) return [];
   try {
-    const r = await fetch("/api/designs", { headers: { Authorization: `Bearer ${t}` } });
+    const r = await fetch(apiUrl("/api/designs"), { headers: { Authorization: `Bearer ${t}` } });
     if (!r.ok) return [];
     return await r.json();
   } catch {
@@ -767,7 +768,7 @@ function ForgotPasswordScreen({
     setBusy(true);
     setMessage("");
     try {
-      const res = await fetch("/api/auth/forgot-password", {
+      const res = await fetch(apiUrl("/api/auth/forgot-password"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim() }),
@@ -922,7 +923,7 @@ function ResetPasswordScreen({
       ? { token: raw.toLowerCase(), password }
       : { code: digitsOnly.slice(0, 6), password };
     try {
-      const res = await fetch("/api/auth/reset-password", {
+      const res = await fetch(apiUrl("/api/auth/reset-password"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1601,7 +1602,7 @@ export default function App() {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    fetch("/api/public-config")
+    fetch(apiUrl("/api/public-config"))
       .then((r) => r.json())
       .then((c: { requireAuthForAi?: boolean }) => setPublicConfig({ requireAuthForAi: Boolean(c.requireAuthForAi) }))
       .catch(() => {});
@@ -1637,7 +1638,7 @@ export default function App() {
     if (!token) return;
     (async () => {
       try {
-        const me = await fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } });
+        const me = await fetch(apiUrl("/api/auth/me"), { headers: { Authorization: `Bearer ${token}` } });
         if (!me.ok) {
           clearToken();
           return;
@@ -1671,7 +1672,7 @@ export default function App() {
   /* Real API auth — used by both AuthScreen and OnboardingScreen */
   const handleAuth = useCallback(async (mode: "signup" | "login", fields: { name?: string; email: string; password: string }) => {
     try {
-      const res = await fetch(`/api/auth/${mode}`, {
+      const res = await fetch(apiUrl(`/api/auth/${mode}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(fields),
@@ -1692,7 +1693,7 @@ export default function App() {
   }, [toast$]);
 
   const handleLogout = useCallback(async () => {
-    await fetch("/api/auth/logout", { method: "POST", headers: authHeader() }).catch(() => {});
+    await fetch(apiUrl("/api/auth/logout"), { method: "POST", headers: authHeader() }).catch(() => {});
     clearToken();
     setUser(null);
     setHistory([]);
@@ -1715,7 +1716,7 @@ export default function App() {
 
   const handleDeleteDesign = useCallback(async (id: string) => {
     try {
-      await fetch(`/api/designs/${id}`, { method: "DELETE", headers: authHeader() });
+      await fetch(apiUrl(`/api/designs/${id}`), { method: "DELETE", headers: authHeader() });
       setHistory((h) => h.filter((e) => e.id !== id));
     } catch {
       /* silent */
@@ -1750,7 +1751,7 @@ export default function App() {
     if (!form.prompt.trim()) { toast$("Add a product idea first.", "error"); return; }
     setLoading(true); setShowExportMenu(false);
     try {
-      const res = await fetch("/api/generate", {
+      const res = await fetch(apiUrl("/api/generate"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify(form),
@@ -1802,7 +1803,7 @@ export default function App() {
       return;
     }
     try {
-      const res = await fetch("/api/export", {
+      const res = await fetch(apiUrl("/api/export"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify({ format, data: design, recordId }),

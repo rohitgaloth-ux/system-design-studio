@@ -16,6 +16,7 @@ Full-stack app: **React + TypeScript** frontend, **Node.js** HTTP API, **SQLite*
 - [Environment variables](#environment-variables)
 - [API overview](#api-overview)
 - [Docker](#docker)
+- [GitHub Pages (free static UI)](#github-pages-free-static-ui)
 - [Deploy (Fly.io)](#deploy-flyio)
 - [Security](#security)
 - [Project structure](#project-structure)
@@ -174,6 +175,30 @@ Mount **`/app/data`** for a persistent SQLite file in production.
 
 ---
 
+## GitHub Pages (free static UI)
+
+[GitHub Pages](https://pages.github.com/) only serves **static files** (HTML/JS/CSS). It **cannot** run this repo’s Node server, SQLite, or Gemini calls. Use Pages for the **React UI** and host the **API on another free/cheap service** (e.g. Fly.io’s allowance, Render free tier, a VPS).
+
+### What this repo does for Pages
+
+- **`VITE_API_BASE_URL`** — at build time, the UI calls your API at this full URL (e.g. `https://my-api.fly.dev`).
+- **`VITE_BASE`** — GitHub Actions sets this to `/your-repo-name/` so assets load under a [project site](https://docs.github.com/en/pages/getting-started-with-github-pages/types-of-github-pages-sites) (`https://<user>.github.io/<repo>/`).
+- Workflow: [`.github/workflows/deploy-github-pages.yml`](.github/workflows/deploy-github-pages.yml).
+
+### One-time setup
+
+1. Deploy the **backend** somewhere and note its public `https://…` origin (no path, no trailing slash).
+2. In the GitHub repo: **Settings → Secrets and variables → Actions → New repository secret**  
+   - Name: **`BACKEND_URL`**  
+   - Value: `https://your-api-host.example` (same as you’ll use in `ALLOWED_ORIGIN`’s “browser origin” partner below).
+3. **Settings → Pages → Build and deployment → Source:** choose **GitHub Actions**.
+4. On the **API server**, set **`ALLOWED_ORIGIN`** to your Pages site **origin** (not the API URL), e.g. `https://rohitgaloth-ux.github.io` — the browser sends `Origin: https://rohitgaloth-ux.github.io` for fetches from `https://rohitgaloth-ux.github.io/system-design-studio/`.
+5. Push to **`main`**; the workflow builds and publishes **`dist/`**.
+
+If **`BACKEND_URL`** is missing, the build still runs but the site will call `/api/...` on `github.io` and **nothing will work** until you add the secret and redeploy (or run the workflow again).
+
+---
+
 ## Deploy (Fly.io)
 
 ### Hosting without putting API keys in Git
@@ -229,6 +254,7 @@ Other platforms: run the same image with a **persistent disk** on `/app/data` an
 ├── index.html          # Vite entry
 ├── vite.config.ts
 ├── tsconfig*.json
+├── .github/workflows/deploy-github-pages.yml
 ├── Dockerfile
 ├── fly.toml
 ├── scripts/deploy-fly.sh
