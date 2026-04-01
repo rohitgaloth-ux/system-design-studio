@@ -1,7 +1,7 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
 # After connecting this repo: Dashboard → New → Blueprint → apply, or enable auto-sync from render.yaml
 #
-# Set DATABASE_URL in the dashboard to a managed Postgres (Neon / Supabase free tier, etc.).
+# Set DATABASE_URL in the dashboard: Supabase → Settings → Database → URI (Direct, port 5432).
 
 services:
   - type: web
