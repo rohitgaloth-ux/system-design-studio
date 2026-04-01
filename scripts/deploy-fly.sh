@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deploy from YOUR machine only. API keys live in Fly "secrets", not in Git or the Docker image.
-# Prerequisites: flyctl installed (`brew install flyctl`), `fly auth login`, volume created once.
+# Prerequisites: flyctl installed (`brew install flyctl`), `fly auth login`, DATABASE_URL + other secrets set.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -12,6 +12,7 @@ fi
 echo "== Checking secrets (set these once; they are NOT read from .env on the server) =="
 echo "Run if you have not yet:"
 echo "  fly secrets set \\"
+echo "    DATABASE_URL=\"postgresql://...\" \\"
 echo "    JWT_SECRET=\"\$(openssl rand -hex 48)\" \\"
 echo "    GEMINI_API_KEY=\"paste-key-here\" \\"
 echo "    ALLOWED_ORIGIN=\"https://YOUR-APP.fly.dev\" \\"

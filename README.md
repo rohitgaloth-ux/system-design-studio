@@ -2,7 +2,7 @@
 
 **Turn a product idea into a structured system architecture** — requirements, components, APIs, tech-stack rationale, and an interactive diagram — in one flow.
 
-Full-stack app: **React + TypeScript** frontend, **Node.js** HTTP API, **SQLite** persistence, optional **Google Gemini** generation, exports to **PDF**, **Word**, and **Markdown** (with Mermaid).
+Full-stack app: **React + TypeScript** frontend, **Node.js** HTTP API, **PostgreSQL** persistence, optional **Google Gemini** generation, exports to **PDF**, **Word**, and **Markdown** (with Mermaid).
 
 ---
 
@@ -34,7 +34,7 @@ Full-stack app: **React + TypeScript** frontend, **Node.js** HTTP API, **SQLite*
 | **Presets** | Domain, pattern, and scale templates to seed constraints. |
 | **Export** | PDF (with drawn diagram), Word (.docx) with component tables, Markdown + Mermaid. |
 | **Accounts** | Sign up / sign in, JWT sessions, password reset via **6-digit email code** (with dev fallback). |
-| **History** | Last 20 saved designs per user in SQLite. |
+| **History** | Last 20 saved designs per user in PostgreSQL. |
 | **Production hardening** | Auth-gated AI/export when configured, rate limits, optional `TRUST_PROXY` for real client IPs. |
 
 ---
@@ -45,7 +45,7 @@ Full-stack app: **React + TypeScript** frontend, **Node.js** HTTP API, **SQLite*
 |-------|---------|
 | UI | React 19, Tailwind CSS v4, Vite 7 |
 | API | Node.js 20, native `http`, TypeScript (`tsx`) |
-| Data | `better-sqlite3`, file DB under `data/` |
+| Data | `pg` (PostgreSQL); `DATABASE_URL` connection string |
 | Auth | `bcryptjs`, `jsonwebtoken`, token versioning for revocation |
 | AI | Gemini (`GEMINI_API_KEY`, header-based key usage) |
 | Docs | `pdfkit`, `docx`, Mermaid in Markdown |
@@ -66,7 +66,7 @@ server.ts
     ├── /api/designs        list / delete saved designs
     └── /api/export         PDF | DOCX | Markdown
             │
-            ├── SQLite (data/designs.db)
+            ├── PostgreSQL (users, designs, password resets)
             └── Gemini API (optional)
 ```
 
@@ -82,7 +82,9 @@ cd system-design-studio
 
 npm install
 cp .env.example .env
-# Edit .env: set GEMINI_API_KEY and JWT_SECRET (see below)
+# Edit .env: set DATABASE_URL, GEMINI_API_KEY, and JWT_SECRET (see below)
+# Local DB: createdb system_design_studio  then e.g.
+#   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/system_design_studio
 
 npm run build
 npm start
@@ -125,6 +127,8 @@ Copy `.env.example` to `.env`. Never commit `.env`.
 
 | Variable | When | Description |
 |----------|------|-------------|
+| `DATABASE_URL` | **Required** | PostgreSQL connection string (local `createdb`, or [Neon](https://neon.tech/) / [Supabase](https://supabase.com/) free tier). |
+| `DATABASE_SSL` | Optional | Set to `0` for local Postgres without TLS (otherwise cloud URLs use SSL with `rejectUnauthorized: false`). |
 | `GEMINI_API_KEY` | Recommended | Live AI generation ([Google AI Studio](https://aistudio.google.com/app/apikey)). |
 | `GEMINI_MODEL` | Optional | Default `gemini-2.5-flash`. |
 | `JWT_SECRET` | **Required in production** | Long random secret. Example: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
@@ -166,20 +170,20 @@ docker build -t system-design-studio .
 
 docker run -p 4173:4173 \
   -e PORT=4173 \
+  -e DATABASE_URL=postgresql://user:pass@host:5432/dbname \
   -e JWT_SECRET=your-secret \
   -e GEMINI_API_KEY=your-key \
   -e NODE_ENV=production \
-  -v "$(pwd)/data:/app/data" \
   system-design-studio
 ```
 
-Mount **`/app/data`** for a persistent SQLite file in production.
+The app does not store data on the container filesystem; all durable state lives in PostgreSQL.
 
 ---
 
 ## GitHub Pages (free static UI)
 
-[GitHub Pages](https://pages.github.com/) only serves **static files** (HTML/JS/CSS). It **cannot** run this repo’s Node server, SQLite, or Gemini calls. Use Pages for the **React UI** and host the **API on another free/cheap service** (e.g. Fly.io’s allowance, Render free tier, a VPS).
+[GitHub Pages](https://pages.github.com/) only serves **static files** (HTML/JS/CSS). It **cannot** run this repo’s Node server, database, or Gemini calls. Use Pages for the **React UI** and host the **API on another free/cheap service** (e.g. Fly.io’s allowance, Render free tier, a VPS).
 
 ### What this repo does for Pages
 
@@ -209,7 +213,7 @@ For a **free API** on [Render](https://render.com/), deploy the app there first,
 
 ### Free tier caveats
 
-- The filesystem is **ephemeral**: **`data/designs.db` is wiped** when the service restarts, redeploys, or the instance is recycled. Fine for demos; for durable data use a managed database later or a paid **Render Disk**.
+- The web service filesystem is still **ephemeral**, but **accounts and saved designs** persist in **PostgreSQL** as long as you set **`DATABASE_URL`** to a managed database (e.g. Neon or Supabase).
 - Free services **spin down** after idle time; the first request after sleep can take **~30–60s** (cold start).
 
 ### One-time setup
@@ -218,7 +222,7 @@ For a **free API** on [Render](https://render.com/), deploy the app there first,
 2. Sign up at [render.com](https://render.com/) and connect your GitHub account.
 3. **New +** → **Blueprint** → select this repository → Render will read `render.yaml`.  
    *Or:* **New +** → **Web Service**, connect the repo, then **Build command** `npm ci && npm run build`, **Start command** `npm start`, **Instance type** Free.
-4. In the service **Environment** tab, add **`GEMINI_API_KEY`** (your key — stored only on Render, not in git).  
+4. In the service **Environment** tab, add **`DATABASE_URL`** (from Neon, Supabase, or another Postgres host) and **`GEMINI_API_KEY`**.  
    **`JWT_SECRET`** is auto-generated by the blueprint; you can rotate it in the dashboard if you like.
 5. After the first deploy, copy the service URL (e.g. `https://system-design-studio.onrender.com`).
 
@@ -247,6 +251,7 @@ Example (run once per app; replace the URL with your real `https://<app>.fly.dev
 
 ```bash
 fly secrets set \
+  DATABASE_URL="postgresql://..." \
   JWT_SECRET="$(openssl rand -hex 48)" \
   GEMINI_API_KEY="your-key-here" \
   ALLOWED_ORIGIN="https://your-app.fly.dev" \
@@ -260,13 +265,12 @@ Optional helper from the project root: `./scripts/deploy-fly.sh` (runs `fly depl
 
 1. [Install `flyctl`](https://fly.io/docs/hands-on/install-flyctl/) and `fly auth login`.
 2. Set a unique `app` name in `fly.toml` (must be globally unique on Fly).
-3. `fly volumes create sd_data --region iad --size 1` (match your `primary_region`).
-4. `fly secrets set` as above (plus email vars for password reset if you use them).
-5. From this directory: `fly deploy`.
+3. `fly secrets set` as above, including **`DATABASE_URL`** (plus email vars for password reset if you use them).
+4. From this directory: `fly deploy`.
 
 Use **`TRUST_PROXY=1`** when the app sits behind Fly’s edge so client IP limits work correctly.
 
-Other platforms: run the same image with a **persistent disk** on `/app/data` and inject secrets via **that platform’s secret manager**, not the repo.
+Other platforms: run the same image with **`DATABASE_URL`** (and other secrets) from **that platform’s secret manager**, not the repo.
 
 ---
 
@@ -303,7 +307,7 @@ Other platforms: run the same image with a **persistent disk** on `/app/data` an
 │   └── components/     # DiagramCanvas, RightPanel, Input, Skeleton, …
 ├── tests/
 │   └── design.test.ts
-├── data/               # SQLite (git-ignored)
+├── data/               # optional local folder (unused by Postgres; legacy / git-ignored)
 └── dist/               # Production build output (git-ignored)
 ```
 

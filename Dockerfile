@@ -3,9 +3,6 @@ FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Install build tools required by better-sqlite3 (native module)
-RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
-
 COPY package*.json ./
 RUN npm ci
 
@@ -18,9 +15,6 @@ FROM node:20-slim AS runner
 
 WORKDIR /app
 
-# Runtime build tools (better-sqlite3 needs them at install time)
-RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
-
 ENV NODE_ENV=production
 
 COPY package*.json ./
@@ -30,10 +24,6 @@ RUN npm ci --omit=dev
 COPY --from=builder /app/dist   ./dist
 COPY --from=builder /app/server.ts ./server.ts
 COPY --from=builder /app/src    ./src
-
-# Persistent volume for the SQLite database
-RUN mkdir -p /app/data
-VOLUME ["/app/data"]
 
 EXPOSE 8080 4173
 
