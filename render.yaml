@@ -1,7 +1,7 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
 # After connecting this repo: Dashboard → New → Blueprint → apply, or enable auto-sync from render.yaml
 #
-# Free web services: disk is ephemeral — SQLite resets on redeploy/sleep. See README (Render section).
+# Set DATABASE_URL in the dashboard to a managed Postgres (Neon / Supabase free tier, etc.).
 
 services:
   - type: web
@@ -19,5 +19,7 @@ services:
         value: "1"
       - key: JWT_SECRET
         generateValue: true
+      - key: DATABASE_URL
+        sync: false
       - key: GEMINI_API_KEY
         sync: false

@@ -7,7 +7,7 @@ import { fileURLToPath } from "url";
 import PDFDocument from "pdfkit";
 import { BorderStyle, Document, HeadingLevel, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
 import { createFallbackDesign, generateMarkdown, hasMeaningfulDesign, normalizeDesign } from "./src/lib/design";
-import Database from "better-sqlite3";
+import pg from "pg";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
@@ -140,53 +140,76 @@ function getClientIp(request) {
   return request.socket.remoteAddress || "unknown";
 }
 
-/* ── SQLite database ─────────────────────────────────────────────────── */
-fs.mkdirSync(path.join(__dirname, "data"), { recursive: true });
-const db = new Database(path.join(__dirname, "data", "designs.db"));
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id            TEXT PRIMARY KEY,
-    name          TEXT NOT NULL,
-    email         TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    token_version INTEGER NOT NULL DEFAULT 0,
-    created_at    INTEGER DEFAULT (unixepoch())
+/* ── PostgreSQL ─────────────────────────────────────────────────────── */
+const DATABASE_URL = process.env.DATABASE_URL || "";
+if (!DATABASE_URL) {
+  console.error(
+    "[fatal] DATABASE_URL is required (PostgreSQL). Example for local dev:\n" +
+      "  postgresql://postgres:postgres@127.0.0.1:5432/system_design_studio\n" +
+      "Create DB: createdb system_design_studio (or use Neon / Supabase free tier).",
   );
+  process.exit(1);
+}
 
-  CREATE TABLE IF NOT EXISTS designs (
-    id         TEXT PRIMARY KEY,
-    user_id    TEXT NOT NULL,
-    idea       TEXT NOT NULL,
-    summary    TEXT,
-    domain     TEXT,
-    pattern    TEXT,
-    data       TEXT NOT NULL,
-    created_at INTEGER DEFAULT (unixepoch()),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+const useSsl =
+  process.env.DATABASE_SSL === "0" || /localhost|127\.0\.0\.1/i.test(DATABASE_URL) ? false : { rejectUnauthorized: false };
+
+const pool = new pg.Pool({
+  connectionString: DATABASE_URL,
+  max: 10,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 15_000,
+  ssl: useSsl,
+});
+
+async function initSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      token_version INTEGER NOT NULL DEFAULT 0,
+      created_at BIGINT DEFAULT (FLOOR(EXTRACT(EPOCH FROM NOW())))::BIGINT
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS designs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      idea TEXT NOT NULL,
+      summary TEXT,
+      domain TEXT,
+      pattern TEXT,
+      data TEXT NOT NULL,
+      created_at BIGINT DEFAULT (FLOOR(EXTRACT(EPOCH FROM NOW())))::BIGINT
+    )`);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS designs_user_idx ON designs (user_id, created_at DESC)`,
   );
-
-  CREATE INDEX IF NOT EXISTS designs_user_idx ON designs(user_id, created_at DESC);
-
-  CREATE TABLE IF NOT EXISTS password_resets (
-    id         TEXT PRIMARY KEY,
-    user_id    TEXT NOT NULL,
-    token_hash TEXT NOT NULL,
-    expires_at INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL,
+      expires_at BIGINT NOT NULL
+    )`);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS password_resets_token_hash_idx ON password_resets (token_hash)`,
   );
-  CREATE INDEX IF NOT EXISTS password_resets_token_hash_idx ON password_resets(token_hash);
-`);
-
-(function migrateUsersTokenVersion() {
-  const cols = db.prepare("PRAGMA table_info(users)").all();
-  if (!cols.some((c) => c.name === "token_version")) {
-    db.exec("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0");
-  }
-})();
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'token_version'
+      ) THEN
+        ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;
+      END IF;
+    END $$`);
+}
 
 /* ── Auth helpers ────────────────────────────────────────────────────── */
-function getAuthUser(request) {
+async function getAuthUser(request) {
   const h = request.headers["authorization"] || "";
   if (!h.startsWith("Bearer ")) return null;
   let decoded;
@@ -196,18 +219,20 @@ function getAuthUser(request) {
     return null;
   }
   if (!decoded || typeof decoded.id !== "string") return null;
-  const row = db
-    .prepare("SELECT id, name, email, COALESCE(token_version, 0) AS token_version FROM users WHERE id = ?")
-    .get(decoded.id);
+  const { rows } = await pool.query(
+    "SELECT id, name, email, COALESCE(token_version, 0) AS token_version FROM users WHERE id = $1",
+    [decoded.id],
+  );
+  const row = rows[0];
   if (!row) return null;
   const tvClaim = typeof decoded.tv === "number" ? decoded.tv : 0;
   if (tvClaim !== row.token_version) return null;
   return { id: row.id, name: row.name, email: row.email };
 }
 
-function issueToken(user) {
-  const row = db.prepare("SELECT COALESCE(token_version, 0) AS tv FROM users WHERE id = ?").get(user.id);
-  const tv = row?.tv ?? 0;
+async function issueToken(user) {
+  const { rows } = await pool.query("SELECT COALESCE(token_version, 0) AS tv FROM users WHERE id = $1", [user.id]);
+  const tv = rows[0]?.tv ?? 0;
   return jwt.sign({ id: user.id, name: user.name, email: user.email, tv }, JWT_SECRET, { expiresIn: "30d" });
 }
 
@@ -227,18 +252,21 @@ async function handleSignup(request, response) {
     return;
   }
 
-  const existing = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
-  if (existing) {
+  const { rows: existingRows } = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
+  if (existingRows[0]) {
     sendJson(response, 409, { error: "An account with that email already exists." });
     return;
   }
 
   const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
   const id   = crypto.randomUUID();
-  db.prepare("INSERT INTO users (id, name, email, password_hash, token_version) VALUES (?, ?, ?, ?, 0)").run(id, name, email, hash);
+  await pool.query(
+    "INSERT INTO users (id, name, email, password_hash, token_version) VALUES ($1, $2, $3, $4, 0)",
+    [id, name, email, hash],
+  );
 
   const user  = { id, name, email };
-  const token = issueToken(user);
+  const token = await issueToken(user);
   sendJson(response, 201, { token, user });
 }
 
@@ -252,7 +280,8 @@ async function handleLogin(request, response) {
     return;
   }
 
-  const row = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+  const { rows } = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+  const row = rows[0];
   if (!row) {
     sendJson(response, 401, { error: "No account found with that email." });
     return;
@@ -265,12 +294,12 @@ async function handleLogin(request, response) {
   }
 
   const user  = { id: row.id, name: row.name, email: row.email };
-  const token = issueToken(user);
+  const token = await issueToken(user);
   sendJson(response, 200, { token, user });
 }
 
-function handleMe(request, response) {
-  const user = getAuthUser(request);
+async function handleMe(request, response) {
+  const user = await getAuthUser(request);
   if (!user) { sendJson(response, 401, { error: "Unauthorized." }); return; }
   sendJson(response, 200, { id: user.id, name: user.name, email: user.email });
 }
@@ -338,18 +367,22 @@ async function handleForgotPassword(request, response) {
     return;
   }
 
-  const row = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
+  const { rows: userRows } = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
+  const row = userRows[0];
   if (!row) {
     sendJson(response, 200, okPayload);
     return;
   }
 
-  db.prepare("DELETE FROM password_resets WHERE user_id = ?").run(row.id);
+  await pool.query("DELETE FROM password_resets WHERE user_id = $1", [row.id]);
   const rawCode = String(crypto.randomInt(100_000, 1_000_000));
   const tokenHash = crypto.createHash("sha256").update(rawCode).digest("hex");
   const prId = crypto.randomUUID();
   const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-  db.prepare("INSERT INTO password_resets (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)").run(prId, row.id, tokenHash, expiresAt);
+  await pool.query(
+    "INSERT INTO password_resets (id, user_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)",
+    [prId, row.id, tokenHash, expiresAt],
+  );
 
   if (IS_PROD) {
     try {
@@ -410,7 +443,11 @@ async function handleResetPassword(request, response, clientIp) {
 
   const tokenHash = crypto.createHash("sha256").update(secret).digest("hex");
   const now = Math.floor(Date.now() / 1000);
-  const pr = db.prepare("SELECT * FROM password_resets WHERE token_hash = ? AND expires_at > ?").get(tokenHash, now);
+  const { rows: prRows } = await pool.query(
+    "SELECT * FROM password_resets WHERE token_hash = $1 AND expires_at > $2",
+    [tokenHash, now],
+  );
+  const pr = prRows[0];
   if (!pr || !hashesEqualHex(pr.token_hash, tokenHash)) {
     noteResetPasswordFailure(clientIp);
     await enforceResetMinDelay(startedAt);
@@ -419,8 +456,8 @@ async function handleResetPassword(request, response, clientIp) {
   }
 
   const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-  db.prepare("UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?").run(hash, pr.user_id);
-  db.prepare("DELETE FROM password_resets WHERE user_id = ?").run(pr.user_id);
+  await pool.query("UPDATE users SET password_hash = $1, token_version = token_version + 1 WHERE id = $2", [hash, pr.user_id]);
+  await pool.query("DELETE FROM password_resets WHERE user_id = $1", [pr.user_id]);
   clearResetPasswordFailures(clientIp);
 
   await enforceResetMinDelay(startedAt);
@@ -428,31 +465,32 @@ async function handleResetPassword(request, response, clientIp) {
 }
 
 /* ── Design CRUD ─────────────────────────────────────────────────────── */
-function handleGetDesigns(request, response) {
-  const user = getAuthUser(request);
+async function handleGetDesigns(request, response) {
+  const user = await getAuthUser(request);
   if (!user) { sendJson(response, 401, { error: "Unauthorized." }); return; }
 
-  const rows = db.prepare(
-    "SELECT id, idea, summary, domain, pattern, data, created_at FROM designs WHERE user_id = ? ORDER BY created_at DESC LIMIT 20"
-  ).all(user.id);
+  const { rows } = await pool.query(
+    "SELECT id, idea, summary, domain, pattern, data, created_at FROM designs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20",
+    [user.id],
+  );
 
-  sendJson(response, 200, rows.map(r => ({
+  sendJson(response, 200, rows.map((r) => ({
     id:        r.id,
     idea:      r.idea,
     summary:   r.summary,
     domain:    r.domain,
     pattern:   r.pattern,
-    createdAt: r.created_at * 1000,
+    createdAt: Number(r.created_at) * 1000,
     design:    JSON.parse(r.data),
   })));
 }
 
-function handleDeleteDesign(request, response, id) {
-  const user = getAuthUser(request);
+async function handleDeleteDesign(request, response, id) {
+  const user = await getAuthUser(request);
   if (!user) { sendJson(response, 401, { error: "Unauthorized." }); return; }
 
-  const info = db.prepare("DELETE FROM designs WHERE id = ? AND user_id = ?").run(id, user.id);
-  if (info.changes === 0) { sendJson(response, 404, { error: "Design not found." }); return; }
+  const r = await pool.query("DELETE FROM designs WHERE id = $1 AND user_id = $2", [id, user.id]);
+  if (r.rowCount === 0) { sendJson(response, 404, { error: "Design not found." }); return; }
   sendJson(response, 200, { ok: true });
 }
 
@@ -1010,7 +1048,7 @@ async function handleGenerate(request, response, clientIp) {
     return;
   }
 
-  const authUser = getAuthUser(request);
+  const authUser = await getAuthUser(request);
   if (REQUIRE_AUTH_AI && !authUser) {
     sendJson(response, 401, { error: "Sign in to generate designs.", code: "AUTH_REQUIRED" });
     return;
@@ -1029,16 +1067,25 @@ async function handleGenerate(request, response, clientIp) {
     const cReqs = payload.constraints?.customRequirements || "";
     const domainMatch  = cReqs.match(/Domain:\s*([^·]+)/);
     const patternMatch = cReqs.match(/Pattern:\s*([^·]+)/);
-    db.prepare(
-      "INSERT OR REPLACE INTO designs (id, user_id, idea, summary, domain, pattern, data) VALUES (?,?,?,?,?,?,?)"
-    ).run(
-      record.id,
-      authUser.id,
-      record.idea,
-      String(record.architecture?.summary || "").slice(0, 200),
-      domainMatch  ? domainMatch[1].trim()  : null,
-      patternMatch ? patternMatch[1].trim() : null,
-      JSON.stringify(record)
+    await pool.query(
+      `INSERT INTO designs (id, user_id, idea, summary, domain, pattern, data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (id) DO UPDATE SET
+         user_id = EXCLUDED.user_id,
+         idea = EXCLUDED.idea,
+         summary = EXCLUDED.summary,
+         domain = EXCLUDED.domain,
+         pattern = EXCLUDED.pattern,
+         data = EXCLUDED.data`,
+      [
+        record.id,
+        authUser.id,
+        record.idea,
+        String(record.architecture?.summary || "").slice(0, 200),
+        domainMatch  ? domainMatch[1].trim()  : null,
+        patternMatch ? patternMatch[1].trim() : null,
+        JSON.stringify(record),
+      ],
     );
   }
 
@@ -1051,7 +1098,7 @@ async function handleGenerate(request, response, clientIp) {
 }
 
 async function handleExport(request, response) {
-  const authUser = getAuthUser(request);
+  const authUser = await getAuthUser(request);
   if (REQUIRE_AUTH_AI && !authUser) {
     sendJson(response, 401, { error: "Sign in to export PDF or Word.", code: "AUTH_REQUIRED" });
     return;
@@ -1063,7 +1110,11 @@ async function handleExport(request, response) {
 
   let rawData = payload.data;
   if (REQUIRE_AUTH_AI && authUser && recordId) {
-    const row = db.prepare("SELECT data FROM designs WHERE id = ? AND user_id = ?").get(recordId, authUser.id);
+    const { rows: exportRows } = await pool.query(
+      "SELECT data FROM designs WHERE id = $1 AND user_id = $2",
+      [recordId, authUser.id],
+    );
+    const row = exportRows[0];
     if (!row) {
       sendJson(response, 404, { error: "Design not found for export." });
       return;
@@ -1148,7 +1199,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/api/health") {
       let dbOk = false;
       try {
-        db.prepare("SELECT 1").get();
+        await pool.query("SELECT 1");
         dbOk = true;
       } catch {
         /* ignore */
@@ -1176,7 +1227,7 @@ const server = http.createServer(async (request, response) => {
       await handleLogin(request, response); return;
     }
     if (request.method === "GET" && request.url === "/api/auth/me") {
-      handleMe(request, response); return;
+      await handleMe(request, response); return;
     }
     if (request.method === "POST" && request.url === "/api/auth/logout") {
       sendJson(response, 200, { ok: true }); return;
@@ -1196,11 +1247,11 @@ const server = http.createServer(async (request, response) => {
 
     /* ── Designs CRUD ── */
     if (request.method === "GET" && request.url === "/api/designs") {
-      handleGetDesigns(request, response); return;
+      await handleGetDesigns(request, response); return;
     }
     if (request.method === "DELETE" && request.url.startsWith("/api/designs/")) {
       const id = request.url.replace("/api/designs/", "");
-      handleDeleteDesign(request, response, id); return;
+      await handleDeleteDesign(request, response, id); return;
     }
 
     /* ── AI + Export ── */
@@ -1234,6 +1285,19 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`System Design Assistant running at http://localhost:${PORT}`);
+async function start() {
+  try {
+    await initSchema();
+  } catch (err) {
+    console.error("[fatal] Database schema init failed:", err);
+    process.exit(1);
+  }
+  server.listen(PORT, () => {
+    console.log(`System Design Assistant running at http://localhost:${PORT}`);
+  });
+}
+
+start().catch((err) => {
+  console.error(err);
+  process.exit(1);
 });
