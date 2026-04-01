@@ -1,0 +1,23 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# After connecting this repo: Dashboard → New → Blueprint → apply, or enable auto-sync from render.yaml
+#
+# Free web services: disk is ephemeral — SQLite resets on redeploy/sleep. See README (Render section).
+
+services:
+  - type: web
+    name: system-design-studio
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
