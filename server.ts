@@ -279,7 +279,7 @@ const FORGOT_PASSWORD_MESSAGE =
   "If an account exists for that email, you will receive a 6-digit reset code shortly.";
 
 async function sendPasswordResetEmail(toEmail, rawCode) {
-  const APP_PUBLIC_URL = (process.env.APP_PUBLIC_URL || "").trim();
+  const APP_PUBLIC_URL = (process.env.APP_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || "").trim();
   const from = (process.env.EMAIL_FROM || "").trim();
   const subject = `${rawCode} — your password reset code`;
   const base = APP_PUBLIC_URL.replace(/\/$/, "");
@@ -1116,7 +1116,10 @@ async function handleExport(request, response) {
   sendJson(response, 400, { error: "Unsupported export format." });
 }
 
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || `http://localhost:${PORT}`;
+const ALLOWED_ORIGIN =
+  process.env.ALLOWED_ORIGIN ||
+  process.env.RENDER_EXTERNAL_URL ||
+  `http://localhost:${PORT}`;
 
 const server = http.createServer(async (request, response) => {
   const origin = request.headers.origin || "";
