@@ -1,0 +1,128 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap");
+@import "tailwindcss";
+
+@theme { --font-sans: "Inter", sans-serif; }
+
+:root  { color: #111111; background: #f7f7f7; font-family: var(--font-sans); }
+*      { box-sizing: border-box; }
+html   { scroll-behavior: smooth; height: 100%; }
+body   { margin: 0; min-width: 320px; background: #f7f7f7; color: #111111; height: 100%; }
+#root  { min-height: 100%; }
+
+/* Workspace fills viewport without browser scroll */
+.workspace-root { height: 100dvh; overflow: hidden; }
+button, input, select, textarea { font: inherit; }
+
+/* ── Scrollbars ─────────────────────────────────────── */
+.scroll-surface { scrollbar-width: thin; scrollbar-color: #d1d5db transparent; }
+.scroll-surface::-webkit-scrollbar { width: 6px; height: 6px; }
+.scroll-surface::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 999px; }
+.diagram-stage { background: #f7f7f7; }
+
+/* ── Landing hover + transition helpers ─────────────────── */
+
+/* Buttons — outlined → filled black, smooth scale-up */
+.btn-outline {
+  transition: background-color 0.22s cubic-bezier(0.4,0,0.2,1),
+              color            0.22s cubic-bezier(0.4,0,0.2,1),
+              border-color     0.22s cubic-bezier(0.4,0,0.2,1),
+              transform        0.18s cubic-bezier(0.4,0,0.2,1),
+              box-shadow       0.22s ease;
+}
+.btn-outline:hover {
+  background-color: #111111;
+  color: #ffffff !important;
+  border-color: #111111 !important;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.14);
+}
+.btn-outline:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+/* Nav links — underline slides in from left */
+.nav-link {
+  position: relative;
+  transition: opacity 0.18s ease;
+}
+.nav-link::after {
+  content: "";
+  position: absolute;
+  left: 0; bottom: -2px;
+  width: 0; height: 1px;
+  background: #111111;
+  transition: width 0.25s cubic-bezier(0.4,0,0.2,1);
+}
+.nav-link:hover::after { width: 100%; }
+.nav-link:hover { opacity: 1 !important; }
+
+/* Output sample rows — background + left slide */
+.sample-row {
+  position: relative;
+  transition: background-color 0.2s ease, padding-left 0.2s ease;
+}
+.sample-row::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 0;
+  background: #111111;
+  transition: width 0.2s ease;
+}
+.sample-row:hover::before { width: 2px; }
+.sample-row:hover {
+  background-color: #ececec;
+  padding-left: 24px;
+}
+
+/* Process steps — left bar + background */
+.step-row {
+  position: relative;
+  transition: background-color 0.2s ease, padding-left 0.2s ease;
+  padding-left: 20px;
+  margin-left: -20px;
+}
+.step-row::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 0;
+  background: #111111;
+  transition: width 0.2s cubic-bezier(0.4,0,0.2,1);
+}
+.step-row:hover::before { width: 2px; }
+.step-row:hover { background-color: #ececec; }
+
+/* Cards — border darkens + lifts */
+.card-hover {
+  transition: border-color  0.22s ease,
+              box-shadow    0.22s ease,
+              transform     0.22s cubic-bezier(0.4,0,0.2,1);
+}
+.card-hover:hover {
+  border-color: #111111 !important;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.09);
+  transform: translateY(-2px);
+}
+
+/* Inline text link — underline draws in */
+.text-link {
+  position: relative;
+  transition: color 0.18s ease;
+}
+.text-link::after {
+  content: "";
+  position: absolute;
+  left: 0; bottom: -1px;
+  width: 100%; height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
+}
+.text-link:hover::after {
+  transform: scaleX(1);
+  transform-origin: left;
+}
+.text-link:hover { color: #111111 !important; }

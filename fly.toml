@@ -1,0 +1,31 @@
+# Fly.io — https://fly.io/docs/
+# 1. Install CLI: curl -L https://fly.io/install.sh | sh
+# 2. fly auth login
+# 3. fly apps create system-design-studio   # pick a unique name; update `app` below
+# 4. fly volumes create sd_data --region iad --size 1
+# 5. fly secrets set JWT_SECRET=... GEMINI_API_KEY=... NODE_ENV=production \
+#      ALLOWED_ORIGIN=https://YOUR_APP.fly.dev TRUST_PROXY=1 APP_PUBLIC_URL=https://YOUR_APP.fly.dev \
+#      RESEND_API_KEY=... EMAIL_FROM="..."
+# 6. fly deploy
+
+app = "system-design-studio"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[mounts]]
+  source = "sd_data"
+  destination = "/app/data"
