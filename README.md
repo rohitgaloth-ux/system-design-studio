@@ -75,7 +75,7 @@ server.ts
 **Requirements:** Node.js **20+**, npm.
 
 ```bash
-git clone https://github.com/rohitghalot/system-design-studio.git
+git clone https://github.com/rohitgaloth-ux/system-design-studio.git
 cd system-design-studio
 
 npm install
