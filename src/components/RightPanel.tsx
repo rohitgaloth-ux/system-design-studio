@@ -1,7 +1,7 @@
 import { memo, useState } from "react";
-import type { NormalizedDesign } from "../types/design";
+import type { GenerationRunMeta, NormalizedDesign } from "../types/design";
 
-const TABS = ["Overview", "Stack", "APIs", "Risks"] as const;
+const TABS = ["Overview", "Stack", "APIs", "Deep dive", "Risks"] as const;
 type TabId = (typeof TABS)[number];
 
 const METHOD_STYLE: Record<string, { bg: string; text: string }> = {
@@ -20,14 +20,55 @@ function TabBar({ active, onChange }: { active: TabId; onChange: (t: TabId) => v
           key={t}
           type="button"
           onClick={() => onChange(t)}
-          className={`relative flex-1 py-2.5 text-xs font-bold tracking-wide transition-colors ${
+          className={`relative flex-1 py-2.5 text-[10px] font-bold tracking-wide transition-colors sm:text-xs ${
             active === t ? "text-blue-600" : "text-gray-400 hover:text-gray-600"
           }`}
         >
           {t}
-          {active === t && <span className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full bg-blue-600" />}
+          {active === t && <span className="absolute bottom-0 left-1 right-1 h-0.5 rounded-full bg-blue-600" />}
         </button>
       ))}
+    </div>
+  );
+}
+
+function RunInsightsSection({ meta }: { meta: GenerationRunMeta | null }) {
+  return (
+    <div className="mb-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5">
+      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">This run</p>
+      {meta ? (
+        <>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <span className="rounded-md bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600 ring-1 ring-slate-200">
+              {meta.source === "gemini" ? "Live model" : "Template fallback"}
+            </span>
+            {meta.model && (
+              <span className="rounded-md bg-white px-2 py-0.5 text-[10px] font-medium text-slate-600 ring-1 ring-slate-200">{meta.model}</span>
+            )}
+            {meta.temperature != null && (
+              <span className="rounded-md bg-white px-2 py-0.5 text-[10px] font-medium text-slate-600 ring-1 ring-slate-200">
+                temp {meta.temperature.toFixed(2)}
+              </span>
+            )}
+            {meta.runNonceShort && (
+              <span className="rounded-md bg-white px-2 py-0.5 font-mono text-[10px] text-slate-600 ring-1 ring-slate-200">run {meta.runNonceShort}…</span>
+            )}
+          </div>
+          <ul className="mt-3 space-y-2">
+            {meta.insights.map((line, i) => (
+              <li key={i} className="flex gap-2 text-xs leading-5 text-slate-700">
+                <span className="mt-1.5 h-1 w-1 flex-shrink-0 rounded-full bg-slate-400" />
+                {line}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="mt-2 text-xs leading-5 text-slate-600">
+          Generate from this workspace to see how each run uses the model (no response cache, stochastic temperature, unique run nonce). Opening
+          history from the dashboard does not restore past run metadata.
+        </p>
+      )}
     </div>
   );
 }
@@ -114,6 +155,41 @@ function APIsTab({ design }: { design: NormalizedDesign }) {
   );
 }
 
+function DeepDiveTab({ design }: { design: NormalizedDesign }) {
+  const sections: { title: string; items: string[]; hint: string }[] = [
+    { title: "Trade-offs", items: design.deepAnalysis.tradeoffs, hint: "Accepted costs and competing goals for this product." },
+    { title: "Failure modes", items: design.deepAnalysis.failureModes, hint: "What breaks first and how you detect or mitigate it." },
+    { title: "Observability", items: design.deepAnalysis.observability, hint: "Signals, SLO probes, and debugging hooks." },
+    { title: "Data consistency", items: design.deepAnalysis.dataConsistency, hint: "Replication, boundaries, and conflict handling." },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <p className="text-xs leading-5 text-gray-500">
+        Deeper pass from the model (beyond the diagram and stack). Empty sections mean the model omitted that block — try Regenerate.
+      </p>
+      {sections.map(({ title, items, hint }) => (
+        <div key={title}>
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-violet-500">{title}</p>
+          <p className="mt-1 text-[11px] text-gray-400">{hint}</p>
+          {items.length ? (
+            <ul className="mt-3 space-y-2.5">
+              {items.map((line, i) => (
+                <li key={i} className="flex gap-3 rounded-lg bg-violet-50/80 px-3 py-2.5 text-sm leading-5 text-gray-700">
+                  <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-violet-400" />
+                  {line}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-xs italic text-gray-400">Nothing returned for this section.</p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function RisksTab({ design }: { design: NormalizedDesign }) {
   return (
     <div className="space-y-5">
@@ -156,7 +232,13 @@ function RisksTab({ design }: { design: NormalizedDesign }) {
   );
 }
 
-function RightPanelComponent({ design }: { design: NormalizedDesign }) {
+function RightPanelComponent({
+  design,
+  generationMeta,
+}: {
+  design: NormalizedDesign;
+  generationMeta: GenerationRunMeta | null;
+}) {
   const [tab, setTab] = useState<TabId>("Overview");
 
   return (
@@ -164,6 +246,7 @@ function RightPanelComponent({ design }: { design: NormalizedDesign }) {
       <div className="shrink-0 px-5 pt-4 pb-0">
         <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-gray-400">Insights</p>
         <p className="mt-0.5 text-sm font-bold text-gray-900">Architecture analysis</p>
+        <RunInsightsSection meta={generationMeta} />
         <TabBar active={tab} onChange={setTab} />
       </div>
 
@@ -171,6 +254,7 @@ function RightPanelComponent({ design }: { design: NormalizedDesign }) {
         {tab === "Overview" && <OverviewTab design={design} />}
         {tab === "Stack" && <StackTab design={design} />}
         {tab === "APIs" && <APIsTab design={design} />}
+        {tab === "Deep dive" && <DeepDiveTab design={design} />}
         {tab === "Risks" && <RisksTab design={design} />}
       </div>
     </div>

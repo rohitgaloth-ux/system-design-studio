@@ -49,6 +49,14 @@ export interface ApiSpec {
   purpose: string;
 }
 
+/** Deeper architecture commentary from the model (trade-offs, failures, ops, consistency). */
+export interface DeepAnalysis {
+  tradeoffs: string[];
+  failureModes: string[];
+  observability: string[];
+  dataConsistency: string[];
+}
+
 export interface NormalizedDesign {
   id: string;
   title: string;
@@ -58,6 +66,7 @@ export interface NormalizedDesign {
   architecture: Architecture;
   techStack: TechStackItem[];
   apis: ApiSpec[];
+  deepAnalysis: DeepAnalysis;
   generatedAt: string;
 }
 
@@ -81,6 +90,12 @@ export interface RawDesignInput {
   simplify?: string[];
   risks?: string[];
   diagram?: RawDiagramInput;
+  deepAnalysis?: {
+    tradeoffs?: string[];
+    failureModes?: string[];
+    observability?: string[];
+    dataConsistency?: string[];
+  };
 }
 
 export interface RawArchitectureInput {
@@ -118,4 +133,13 @@ export interface DesignConstraints {
   budget?: string;
   security?: string;
   customRequirements?: string;
+}
+
+/** Per-/api/generate response: how this architecture was produced (not stored on history rows). */
+export interface GenerationRunMeta {
+  source: "gemini" | "fallback";
+  model: string | null;
+  temperature: number | null;
+  runNonceShort: string;
+  insights: string[];
 }

@@ -15,9 +15,10 @@ import {
 import { Input } from "./components/Input";
 import { Skeleton } from "./components/Skeleton";
 import { apiUrl } from "./lib/apiBase";
-import { createFallbackDesign, generateMarkdown, hasMeaningfulDesign } from "./lib/design";
-import type { NormalizedDesign } from "./types/design";
+import { createFallbackDesign, generateMarkdown, hasMeaningfulDesign, normalizeDesign } from "./lib/design";
+import type { GenerationRunMeta, NormalizedDesign, RawDesignInput } from "./types/design";
 import "./index.css";
+import { JobTrackerScreen } from "./components/JobTrackerScreen";
 
 const DiagramCanvas = lazy(() => import("./components/DiagramCanvas"));
 const RightPanel = lazy(() => import("./components/RightPanel"));
@@ -29,6 +30,7 @@ type Screen =
   | "reset-password"
   | "onboarding"
   | "dashboard"
+  | "jobtracker"
   | "newdesign"
   | "workspace";
 
@@ -67,6 +69,24 @@ const INITIAL_FORM: FormState = {
     customRequirements: "",
   },
 };
+
+/** Long, multi-constraint scenario to stress depth (diagram, APIs, deepAnalysis). */
+function stressTestForm(): FormState {
+  return {
+    prompt:
+      "Global multi-tenant B2B platform for real-time supply chain risk: ingest IoT telemetry, ERP, customs, and carrier APIs; run graph analytics and ML scoring; expose policy-based webhooks and batch exports; support per-tenant encryption keys, EU/US data residency, offline-first mobile for field inspectors, and quarterly third-party audits.",
+    constraints: {
+      ...INITIAL_FORM.constraints,
+      scale: "50k tenants · 2B events/month · burst 500k RPS at ingestion edge",
+      latency: "P99 < 150ms for synchronous risk API; async acceptable for scoring & exports",
+      budget: "Prefer managed services; dedicated compute only for ML training",
+      region: "Active-active US-East + EU-West; tenant data pinned to home region",
+      security: "SOC2 Type II, ISO 27001, mTLS mesh, HSM-backed keys, field-level encryption",
+      customRequirements:
+        "Domain: Logistics / RegTech · Pattern: Event-driven microservices + CQRS read models · Require: deterministic replay, exactly-once webhook strategy (document trade-offs), blue/green deploys, chaos hooks, DR targets RPO ≤ 5m / RTO ≤ 30m.",
+    },
+  };
+}
 const SIGNUP_DEFAULT = { name: "", email: "", password: "" };
 
 /* ── Token helpers (single source of truth — DB is authoritative) ─────── */
@@ -94,7 +114,11 @@ async function fetchDesigns(): Promise<DesignHistoryEntry[]> {
   try {
     const r = await fetch(apiUrl("/api/designs"), { headers: { Authorization: `Bearer ${t}` } });
     if (!r.ok) return [];
-    return await r.json();
+    const rows = (await r.json()) as DesignHistoryEntry[];
+    return rows.map((e) => ({
+      ...e,
+      design: normalizeDesign(e.design as unknown as RawDesignInput),
+    }));
   } catch {
     return [];
   }
@@ -588,6 +612,7 @@ function DashboardScreen({
   onNewDesign,
   onOpenHistory,
   onLogout,
+  onJobTracker,
   onDeleteDesign: _onDeleteDesign,
 }: {
   user: SessionUser;
@@ -595,6 +620,7 @@ function DashboardScreen({
   onNewDesign: (preset?: string) => void;
   onOpenHistory: (e: DesignHistoryEntry) => void;
   onLogout: () => void;
+  onJobTracker: () => void;
   onDeleteDesign: (id: string) => void;
 }) {
   const h = new Date().getHours();
@@ -619,11 +645,18 @@ function DashboardScreen({
         <p className="mt-3 text-base" style={{ color: MUTED }}>
           {history.length > 0 ? "Open a recent design or start fresh." : "Describe a product and get a complete system architecture."}
         </p>
-        <button type="button" onClick={() => onNewDesign()}
-          className="btn-outline mt-6 inline-flex items-center gap-2 border px-6 py-3 text-sm font-semibold"
-          style={{ borderColor: DARK, color: DARK }}>
-          + New design
-        </button>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <button type="button" onClick={() => onNewDesign()}
+            className="btn-outline inline-flex items-center gap-2 border px-6 py-3 text-sm font-semibold"
+            style={{ borderColor: DARK, color: DARK }}>
+            + New design
+          </button>
+          <button type="button" onClick={onJobTracker}
+            className="btn-outline inline-flex items-center gap-2 border px-6 py-3 text-sm font-semibold"
+            style={{ borderColor: DARK, color: DARK }}>
+            Job tracker
+          </button>
+        </div>
 
         {history.length > 0 && (
           <div className="mt-12">
@@ -1316,10 +1349,12 @@ function WorkspaceScreen({
   metrics,
   user,
   designMeta,
+  generationMeta,
   requireAuthForAi,
   onRequestSignIn,
   onPromptChange,
   onConstraintChange,
+  onLoadStressTest,
   onGenerate,
   onReset,
   onExport,
@@ -1339,10 +1374,12 @@ function WorkspaceScreen({
   metrics: { label: string; value: number }[];
   user: SessionUser | null;
   designMeta: { domain?: string; pattern?: string; scale?: string } | null;
+  generationMeta: GenerationRunMeta | null;
   requireAuthForAi: boolean;
   onRequestSignIn: () => void;
   onPromptChange: (v: string) => void;
   onConstraintChange: (k: ConstraintKey, v: string) => void;
+  onLoadStressTest: () => void;
   onGenerate: () => void;
   onReset: () => void;
   onExport: (fmt: ExportFormat) => void;
@@ -1505,6 +1542,13 @@ function WorkspaceScreen({
                   className="resize-none bg-gray-50 text-sm"
                   placeholder="Describe the product, users, and critical flows." />
               </label>
+              <div className="rounded-lg border border-amber-100 bg-amber-50/90 px-3 py-2.5">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-amber-800">Stress test</p>
+                <button type="button" onClick={onLoadStressTest}
+                  className="mt-1 text-left text-xs font-semibold text-amber-900 underline-offset-2 hover:underline">
+                  Load deep scenario (multi-region, compliance, CQRS, DR) →
+                </button>
+              </div>
               <div className="space-y-3">
                 <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Constraints</p>
                 {(
@@ -1556,7 +1600,7 @@ function WorkspaceScreen({
               ? "flex flex-1 flex-col"
               : "hidden xl:flex xl:flex-col"}`}>
             <Suspense fallback={<InsightSkeleton />}>
-              <RightPanel design={design} />
+              <RightPanel design={design} generationMeta={generationMeta} />
             </Suspense>
           </aside>
         )}
@@ -1592,6 +1636,7 @@ export default function App() {
   const [toast, setToast] = useState<ToastState>(null);
   const [signup, setSignup] = useState(SIGNUP_DEFAULT);
   const [showInsights, setShowInsights] = useState(false);
+  const [generationMeta, setGenerationMeta] = useState<GenerationRunMeta | null>(null);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [screen, setScreen] = useState<Screen>("landing");
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -1710,6 +1755,7 @@ export default function App() {
   const handleReset = useCallback(() => {
     setForm(INITIAL_FORM);
     setRecordId("");
+    setGenerationMeta(null);
     setDesign(createFallbackDesign("Architecture workspace for a new product idea.", INITIAL_FORM.constraints));
     setScreen(user ? "dashboard" : "landing");
   }, [user]);
@@ -1744,6 +1790,7 @@ export default function App() {
   const handleOpenHistory = useCallback((entry: DesignHistoryEntry) => {
     setDesign(entry.design);
     setForm(f => ({ ...f, prompt: entry.idea }));
+    setGenerationMeta(null);
     setScreen("workspace");
   }, []);
 
@@ -1763,6 +1810,7 @@ export default function App() {
         recordId?: string;
         usedFallback?: boolean;
         fallbackReason?: string;
+        generationMeta?: GenerationRunMeta;
       };
       if (res.status === 401 && payload.code === "AUTH_REQUIRED") {
         toast$("Sign in to generate designs.", "info");
@@ -1773,8 +1821,9 @@ export default function App() {
         throw new Error(payload.error || "Too many requests.");
       }
       if (!res.ok) throw new Error(payload.error || "Generation failed.");
-      setDesign(payload.data!);
+      setDesign(normalizeDesign(payload.data as unknown as RawDesignInput));
       setRecordId(payload.recordId || "");
+      setGenerationMeta(payload.generationMeta ?? null);
       if (payload.usedFallback) {
         toast$(
           "We could not use the AI for this run (check your API key or try again). A template design was returned instead.",
@@ -1832,9 +1881,11 @@ export default function App() {
         <WorkspaceScreen
           form={form} design={design} loading={loading} exporting={exporting}
           hasDesign={hasDesign} showInsights={showInsights} showExportMenu={showExportMenu} metrics={metrics} user={user} designMeta={designMeta}
+          generationMeta={generationMeta}
           requireAuthForAi={publicConfig.requireAuthForAi}
           onPromptChange={(v) => setForm((c) => ({ ...c, prompt: v }))}
           onConstraintChange={(k, v) => setForm((c) => ({ ...c, constraints: { ...c.constraints, [k]: v } }))}
+          onLoadStressTest={() => { setForm(stressTestForm()); setShowInsights(true); }}
           onGenerate={handleGenerate} onReset={handleReset} onExport={exportFile}
           onToggleInsights={() => setShowInsights((v) => !v)}
           onToggleExportMenu={() => setShowExportMenu((v) => !v)}
@@ -1856,7 +1907,16 @@ export default function App() {
             onNewDesign={handleNewDesign}
             onOpenHistory={handleOpenHistory}
             onLogout={handleLogout}
+            onJobTracker={() => setScreen("jobtracker")}
             onDeleteDesign={handleDeleteDesign}
+          />
+        ) : null
+      ) : screen === "jobtracker" ? (
+        user ? (
+          <JobTrackerScreen
+            userName={user.name}
+            onBack={() => setScreen("dashboard")}
+            onToast={toast$}
           />
         ) : null
       ) : screen === "auth" ? (

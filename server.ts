@@ -187,6 +187,36 @@ async function initSchema() {
     `CREATE INDEX IF NOT EXISTS designs_user_idx ON designs (user_id, created_at DESC)`,
   );
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_applications (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      company TEXT NOT NULL,
+      title TEXT NOT NULL,
+      job_url TEXT,
+      status TEXT NOT NULL DEFAULT 'interested',
+      applied_at BIGINT,
+      notes TEXT,
+      tailored_resume_snippet TEXT,
+      automation_state TEXT NOT NULL DEFAULT 'none',
+      created_at BIGINT DEFAULT (FLOOR(EXTRACT(EPOCH FROM NOW())))::BIGINT,
+      updated_at BIGINT DEFAULT (FLOOR(EXTRACT(EPOCH FROM NOW())))::BIGINT
+    )`);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS job_apps_user_idx ON job_applications (user_id, updated_at DESC)`,
+  );
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_application_updates (
+      id TEXT PRIMARY KEY,
+      application_id TEXT NOT NULL REFERENCES job_applications(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'note',
+      created_at BIGINT DEFAULT (FLOOR(EXTRACT(EPOCH FROM NOW())))::BIGINT
+    )`);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS job_updates_app_idx ON job_application_updates (application_id, created_at DESC)`,
+  );
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS password_resets (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -494,6 +524,305 @@ async function handleDeleteDesign(request, response, id) {
   sendJson(response, 200, { ok: true });
 }
 
+const JOB_STATUSES = new Set(["interested", "applied", "screening", "interview", "offer", "rejected", "withdrawn"]);
+const JOB_UPDATE_KINDS = new Set(["note", "status_change", "system"]);
+
+function rowToJobApplication(row, updates) {
+  return {
+    id: row.id,
+    company: row.company,
+    title: row.title,
+    jobUrl: row.job_url || "",
+    status: row.status,
+    appliedAt: row.applied_at != null ? Number(row.applied_at) * 1000 : null,
+    notes: row.notes || "",
+    tailoredResumeSnippet: row.tailored_resume_snippet || "",
+    automationState: row.automation_state || "none",
+    createdAt: Number(row.created_at) * 1000,
+    updatedAt: Number(row.updated_at) * 1000,
+    updates: (updates || []).map((u) => ({
+      id: u.id,
+      body: u.body,
+      kind: u.kind,
+      createdAt: Number(u.created_at) * 1000,
+    })),
+  };
+}
+
+async function handleListJobApplications(request, response) {
+  const user = await getAuthUser(request);
+  if (!user) { sendJson(response, 401, { error: "Unauthorized." }); return; }
+
+  const { rows } = await pool.query(
+    `SELECT * FROM job_applications WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 200`,
+    [user.id],
+  );
+  const ids = rows.map((r) => r.id);
+  if (ids.length === 0) {
+    sendJson(response, 200, []);
+    return;
+  }
+  const { rows: upRows } = await pool.query(
+    `SELECT * FROM job_application_updates WHERE application_id = ANY($1::text[]) ORDER BY created_at ASC`,
+    [ids],
+  );
+  const byApp = new Map();
+  for (const u of upRows) {
+    const list = byApp.get(u.application_id) || [];
+    list.push(u);
+    byApp.set(u.application_id, list);
+  }
+  sendJson(
+    response,
+    200,
+    rows.map((r) => rowToJobApplication(r, byApp.get(r.id) || [])),
+  );
+}
+
+async function handleCreateJobApplication(request, response) {
+  const user = await getAuthUser(request);
+  if (!user) { sendJson(response, 401, { error: "Unauthorized." }); return; }
+
+  const body = await readJsonBody(request);
+  const company = String(body.company || "").trim();
+  const title = String(body.title || "").trim();
+  const jobUrl = String(body.jobUrl || body.job_url || "").trim() || null;
+  const notes = String(body.notes || "").trim() || null;
+  let status = String(body.status || "interested").trim().toLowerCase();
+  if (!JOB_STATUSES.has(status)) status = "interested";
+
+  if (!company || !title) {
+    sendJson(response, 400, { error: "Company and job title are required." });
+    return;
+  }
+
+  const id = crypto.randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+  const appliedAt =
+    status === "applied" ? now : null;
+
+  await pool.query(
+    `INSERT INTO job_applications (id, user_id, company, title, job_url, status, applied_at, notes, automation_state, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'none', $9, $9)`,
+    [id, user.id, company, title, jobUrl, status, appliedAt, notes, now],
+  );
+
+  if (status === "applied") {
+    const uid = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO job_application_updates (id, application_id, user_id, body, kind, created_at) VALUES ($1, $2, $3, $4, 'status_change', $5)`,
+      [uid, id, user.id, `Status: ${status}`, now],
+    );
+  }
+
+  const { rows } = await pool.query("SELECT * FROM job_applications WHERE id = $1", [id]);
+  sendJson(response, 201, rowToJobApplication(rows[0], []));
+}
+
+async function handlePatchJobApplication(request, response, id) {
+  const user = await getAuthUser(request);
+  if (!user) { sendJson(response, 401, { error: "Unauthorized." }); return; }
+
+  const body = await readJsonBody(request);
+  const { rows: existingRows } = await pool.query(
+    "SELECT * FROM job_applications WHERE id = $1 AND user_id = $2",
+    [id, user.id],
+  );
+  const existing = existingRows[0];
+  if (!existing) {
+    sendJson(response, 404, { error: "Application not found." });
+    return;
+  }
+
+  const company = body.company !== undefined ? String(body.company).trim() : existing.company;
+  const title = body.title !== undefined ? String(body.title).trim() : existing.title;
+  const jobUrl =
+    body.jobUrl !== undefined || body.job_url !== undefined
+      ? String(body.jobUrl ?? body.job_url ?? "").trim() || null
+      : existing.job_url;
+  const notes = body.notes !== undefined ? String(body.notes).trim() || null : existing.notes;
+  let status = body.status !== undefined ? String(body.status).trim().toLowerCase() : existing.status;
+  if (!JOB_STATUSES.has(status)) status = existing.status;
+
+  const tailoredResumeSnippet =
+    body.tailoredResumeSnippet !== undefined
+      ? String(body.tailoredResumeSnippet).trim() || null
+      : existing.tailored_resume_snippet;
+
+  let automationState =
+    body.automationState !== undefined
+      ? String(body.automationState || "none").trim()
+      : existing.automation_state;
+  if (!["none", "pending", "running", "completed", "failed"].includes(automationState)) {
+    automationState = existing.automation_state || "none";
+  }
+
+  let appliedAt = existing.applied_at != null ? Number(existing.applied_at) : null;
+  const prevStatus = existing.status;
+  if (status === "applied" && prevStatus !== "applied" && !appliedAt) {
+    appliedAt = Math.floor(Date.now() / 1000);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+
+  await pool.query(
+    `UPDATE job_applications SET
+      company = $1, title = $2, job_url = $3, status = $4, applied_at = $5, notes = $6,
+      tailored_resume_snippet = $7, automation_state = $8, updated_at = $9
+     WHERE id = $10 AND user_id = $11`,
+    [company, title, jobUrl, status, appliedAt, notes, tailoredResumeSnippet, automationState, now, id, user.id],
+  );
+
+  if (prevStatus !== status) {
+    const uid = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO job_application_updates (id, application_id, user_id, body, kind, created_at) VALUES ($1, $2, $3, $4, 'status_change', $5)`,
+      [uid, id, user.id, `Status changed: ${prevStatus} → ${status}`, now],
+    );
+  }
+
+  const { rows } = await pool.query("SELECT * FROM job_applications WHERE id = $1", [id]);
+  const { rows: ups } = await pool.query(
+    "SELECT * FROM job_application_updates WHERE application_id = $1 ORDER BY created_at ASC",
+    [id],
+  );
+  sendJson(response, 200, rowToJobApplication(rows[0], ups));
+}
+
+async function handleDeleteJobApplication(request, response, id) {
+  const user = await getAuthUser(request);
+  if (!user) { sendJson(response, 401, { error: "Unauthorized." }); return; }
+
+  const r = await pool.query("DELETE FROM job_applications WHERE id = $1 AND user_id = $2", [id, user.id]);
+  if (r.rowCount === 0) { sendJson(response, 404, { error: "Application not found." }); return; }
+  sendJson(response, 200, { ok: true });
+}
+
+async function handleAddJobUpdate(request, response, appId) {
+  const user = await getAuthUser(request);
+  if (!user) { sendJson(response, 401, { error: "Unauthorized." }); return; }
+
+  const { rows: appRows } = await pool.query(
+    "SELECT id FROM job_applications WHERE id = $1 AND user_id = $2",
+    [appId, user.id],
+  );
+  if (!appRows[0]) {
+    sendJson(response, 404, { error: "Application not found." });
+    return;
+  }
+
+  const body = await readJsonBody(request);
+  const text = String(body.body || "").trim();
+  let kind = String(body.kind || "note").trim().toLowerCase();
+  if (!JOB_UPDATE_KINDS.has(kind)) kind = "note";
+  if (!text) {
+    sendJson(response, 400, { error: "Update text is required." });
+    return;
+  }
+
+  const uid = crypto.randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+  await pool.query(
+    `INSERT INTO job_application_updates (id, application_id, user_id, body, kind, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [uid, appId, user.id, text, kind, now],
+  );
+  await pool.query("UPDATE job_applications SET updated_at = $1 WHERE id = $2", [now, appId]);
+
+  const { rows } = await pool.query("SELECT * FROM job_application_updates WHERE id = $1", [uid]);
+  const u = rows[0];
+  sendJson(response, 201, {
+    id: u.id,
+    body: u.body,
+    kind: u.kind,
+    createdAt: Number(u.created_at) * 1000,
+  });
+}
+
+const MAX_RESUME_CHARS = 24_000;
+const MAX_JD_CHARS = 24_000;
+
+async function callGeminiResumeTailor(masterResume, jobDescription) {
+  if (!GEMINI_API_KEY) return null;
+
+  const prompt = [
+    "You tailor resumes for job applications. Given the candidate MASTER RESUME and the JOB DESCRIPTION,",
+    "produce a tailored resume body in plain text (use clear section headers like EXPERIENCE, SKILLS).",
+    "Rules:",
+    "- Do not invent employers, dates, degrees, or skills the candidate did not list.",
+    "- You may reorder and rephrase bullets to align with the job; keep facts truthful.",
+    "- If the JD is empty, return a lightly polished version of the master resume.",
+    "- Output ONLY the resume text, no preamble or markdown code fences.",
+    "",
+    "=== MASTER RESUME ===",
+    masterResume.slice(0, MAX_RESUME_CHARS),
+    "",
+    "=== JOB DESCRIPTION ===",
+    jobDescription.slice(0, MAX_JD_CHARS),
+  ].join("\n");
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`;
+  const body = JSON.stringify({
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.35, maxOutputTokens: 8192 },
+  });
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY },
+    body,
+  });
+  if (!response.ok) {
+    const t = await response.text();
+    throw new Error(`Gemini error ${response.status}: ${t.slice(0, 200)}`);
+  }
+  const payload = await response.json();
+  const rawText = payload?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("").trim();
+  return rawText || null;
+}
+
+async function handleTailorResume(request, response, clientIp) {
+  const user = await getAuthUser(request);
+  if (REQUIRE_AUTH_AI && !user) {
+    sendJson(response, 401, { error: "Sign in to tailor your resume.", code: "AUTH_REQUIRED" });
+    return;
+  }
+  if (!user) {
+    sendJson(response, 401, { error: "Unauthorized." });
+    return;
+  }
+
+  if (isRateLimited(clientIp, 30, 60 * 60 * 1000, "tailor-resume-hourly")) {
+    sendJson(response, 429, { error: "Too many tailoring requests this hour. Try again later." });
+    return;
+  }
+
+  const body = await readJsonBody(request);
+  const masterResume = String(body.masterResume || body.master_resume || "").trim();
+  const jobDescription = String(body.jobDescription || body.job_description || "").trim();
+
+  if (!masterResume) {
+    sendJson(response, 400, { error: "masterResume is required." });
+    return;
+  }
+
+  if (!GEMINI_API_KEY) {
+    sendJson(response, 503, { error: "Resume tailoring requires GEMINI_API_KEY on the server." });
+    return;
+  }
+
+  try {
+    const tailored = await callGeminiResumeTailor(masterResume, jobDescription);
+    if (!tailored) {
+      sendJson(response, 502, { error: "The model returned empty output. Try again." });
+      return;
+    }
+    sendJson(response, 200, { tailoredResume: tailored });
+  } catch (e) {
+    slog("error", "tailor_resume_failed", { message: String(e?.message || e) });
+    sendJson(response, 500, { error: e?.message || "Tailoring failed." });
+  }
+}
+
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
@@ -602,7 +931,7 @@ function sanitizePromptPayload(payload = {}) {
   };
 }
 
-function buildPrompt(input) {
+function buildPrompt(input, runNonce) {
   const domainHint   = input.constraints?.customRequirements || "";
   const domainLine   = domainHint ? `\nContext: ${domainHint}` : "";
 
@@ -627,7 +956,13 @@ function buildPrompt(input) {
           }
         },
         techStack: [{ layer: "string", name: "string", reason: "string" }],
-        apis: [{ name: "string", method: "string", path: "string", purpose: "string" }]
+        apis: [{ name: "string", method: "string", path: "string", purpose: "string" }],
+        deepAnalysis: {
+          tradeoffs: ["string"],
+          failureModes: ["string"],
+          observability: ["string"],
+          dataConsistency: ["string"]
+        }
       },
       null,
       2
@@ -641,6 +976,9 @@ function buildPrompt(input) {
     "- Edges must connect real node ids.",
     "- Include the actual product modules from the idea inside the node labels and descriptions.",
     "- Prefer a readable request flow such as client -> gateway -> services -> queue/workers -> database/cache/cloud.",
+    "- deepAnalysis: four arrays, each with at least 3 bullets grounded in THIS product (trade-offs you explicitly accept, realistic failure modes and mitigations, observability signals and SLO probes, consistency/replication boundaries and conflict handling).",
+    "",
+    `Run nonce (unique per request; vary your design details accordingly): ${runNonce}`,
     "",
     `Product idea: ${input.prompt}`,
     `Scale: ${input.constraints.scale || "Not specified"}`,
@@ -664,13 +1002,14 @@ function isValidAiResponse(parsed) {
 }
 
 /** Call Gemini with up to 3 retries and exponential back-off. */
-async function callGemini(input) {
+async function callGemini(input, runNonce) {
   if (!GEMINI_API_KEY) return null;
 
+  const temperature = 0.45 + Math.random() * 0.35;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`;
   const body = JSON.stringify({
-    contents: [{ role: "user", parts: [{ text: buildPrompt(input) }] }],
-    generationConfig: { temperature: 0.5, responseMimeType: "application/json" },
+    contents: [{ role: "user", parts: [{ text: buildPrompt(input, runNonce) }] }],
+    generationConfig: { temperature, responseMimeType: "application/json" },
   });
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -705,7 +1044,7 @@ async function callGemini(input) {
         return null;
       }
 
-      return parsed;
+      return { parsed, temperature };
     } catch (err) {
       if (attempt === 3) throw err;
       await sleep(1000 * attempt);
@@ -714,24 +1053,93 @@ async function callGemini(input) {
   return null;
 }
 
+function buildGenerationMeta({ source, model, temperature, runNonce, usedFallback, reason }) {
+  const runShort = typeof runNonce === "string" ? runNonce.slice(0, 8) : "";
+  const insights = [];
+  if (!usedFallback) {
+    insights.push("Each generate request hits the API fresh — there is no server-side cache of prior Gemini responses.");
+    insights.push(
+      `Model ${model} with temperature ${typeof temperature === "number" ? temperature.toFixed(2) : "?"} — outputs are stochastic; the same prompt can produce different architectures.`,
+    );
+  } else if (reason === "no_api_key") {
+    insights.push("Gemini was not called — GEMINI_API_KEY is not set on the server.");
+    insights.push("You are seeing the deterministic template design for your prompt until an API key is configured.");
+  } else {
+    insights.push("Gemini was called but did not return usable JSON after retries, or the response failed validation.");
+    insights.push("This run uses the deterministic template design; fix API health or try again.");
+  }
+  insights.push(`Run nonce ${runShort}… is unique per click so the model treats each generate as a new pass.`);
+  if (usedFallback && reason === "gemini_error") {
+    insights.push("Check server logs and Gemini quotas if errors persist.");
+  }
+  if (usedFallback && reason === "no_api_key") {
+    insights.push("Set GEMINI_API_KEY in the server environment to enable live generation.");
+  }
+  return {
+    source,
+    model: model || null,
+    temperature: typeof temperature === "number" ? temperature : null,
+    runNonceShort: runShort,
+    insights,
+  };
+}
+
 async function generateDesign(input) {
+  const runNonce = crypto.randomUUID();
   const fallback = createFallbackDesign(input.prompt, input.constraints);
 
   try {
-    const aiOutput = await callGemini(input);
-    if (!aiOutput) {
+    const aiResult = await callGemini(input, runNonce);
+    if (!aiResult) {
       const reason = !GEMINI_API_KEY ? "no_api_key" : "gemini_empty_or_invalid";
-      return { design: fallback, usedFallback: true, reason };
+      return {
+        design: fallback,
+        usedFallback: true,
+        reason,
+        generationMeta: buildGenerationMeta({
+          source: "fallback",
+          model: GEMINI_MODEL,
+          temperature: null,
+          runNonce,
+          usedFallback: true,
+          reason,
+        }),
+      };
     }
 
+    const { parsed, temperature } = aiResult;
     const design = normalizeDesign({
-      ...aiOutput,
+      ...parsed,
       title: "System Design Assistant",
-      generatedAt: new Date().toISOString()
+      generatedAt: new Date().toISOString(),
     });
-    return { design, usedFallback: false, reason: "" };
+    return {
+      design,
+      usedFallback: false,
+      reason: "",
+      generationMeta: buildGenerationMeta({
+        source: "gemini",
+        model: GEMINI_MODEL,
+        temperature,
+        runNonce,
+        usedFallback: false,
+        reason: "",
+      }),
+    };
   } catch {
-    return { design: fallback, usedFallback: true, reason: "gemini_error" };
+    return {
+      design: fallback,
+      usedFallback: true,
+      reason: "gemini_error",
+      generationMeta: buildGenerationMeta({
+        source: "fallback",
+        model: GEMINI_MODEL,
+        temperature: null,
+        runNonce,
+        usedFallback: true,
+        reason: "gemini_error",
+      }),
+    };
   }
 }
 
@@ -1059,7 +1467,7 @@ async function handleGenerate(request, response, clientIp) {
     return;
   }
 
-  const { design: generated, usedFallback, reason } = await generateDesign(payload);
+  const { design: generated, usedFallback, reason, generationMeta } = await generateDesign(payload);
   const record = createRecord(generated);
 
   // If the user is authenticated, persist the design to the database.
@@ -1093,6 +1501,7 @@ async function handleGenerate(request, response, clientIp) {
     recordId: record.id,
     data: record,
     usedFallback,
+    generationMeta,
     ...(usedFallback && reason ? { fallbackReason: reason } : {}),
   });
 }
@@ -1250,8 +1659,42 @@ const server = http.createServer(async (request, response) => {
       await handleGetDesigns(request, response); return;
     }
     if (request.method === "DELETE" && request.url.startsWith("/api/designs/")) {
-      const id = request.url.replace("/api/designs/", "");
+      const id = request.url.replace("/api/designs/", "").split("?")[0];
       await handleDeleteDesign(request, response, id); return;
+    }
+
+    /* ── Job applications (tracker + resume tailor) ── */
+    if (request.method === "GET" && request.url.split("?")[0] === "/api/jobs/applications") {
+      await handleListJobApplications(request, response); return;
+    }
+    if (request.method === "POST" && request.url.split("?")[0] === "/api/jobs/applications") {
+      if (isRateLimited(clientIp, 60, 60_000, "jobs-post")) {
+        sendJson(response, 429, { error: "Too many requests. Try again in a minute." }); return;
+      }
+      await handleCreateJobApplication(request, response); return;
+    }
+    if (request.method === "POST" && request.url.split("?")[0] === "/api/jobs/tailor-resume") {
+      await handleTailorResume(request, response, clientIp); return;
+    }
+    {
+      const patchPath = request.url.split("?")[0];
+      const updatesMatch = /^\/api\/jobs\/applications\/([^/]+)\/updates$/.exec(patchPath);
+      if (request.method === "POST" && updatesMatch) {
+        if (isRateLimited(clientIp, 120, 60_000, "jobs-updates")) {
+          sendJson(response, 429, { error: "Too many requests. Try again in a minute." }); return;
+        }
+        await handleAddJobUpdate(request, response, updatesMatch[1]); return;
+      }
+      const appMatch = /^\/api\/jobs\/applications\/([^/]+)$/.exec(patchPath);
+      if (appMatch) {
+        const jobId = appMatch[1];
+        if (request.method === "PATCH") {
+          await handlePatchJobApplication(request, response, jobId); return;
+        }
+        if (request.method === "DELETE") {
+          await handleDeleteJobApplication(request, response, jobId); return;
+        }
+      }
     }
 
     /* ── AI + Export ── */

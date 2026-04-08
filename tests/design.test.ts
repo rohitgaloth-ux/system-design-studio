@@ -79,6 +79,8 @@ describe("generateMarkdown", () => {
       "## Functional Requirements",
       "## Non-Functional Requirements",
       "## Architecture Summary",
+      "## Deep analysis — trade-offs",
+      "## Deep analysis — data consistency",
       "## Tech Stack",
       "## APIs",
     ];

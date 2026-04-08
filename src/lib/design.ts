@@ -5,6 +5,7 @@ import type {
   Diagram,
   DiagramEdge,
   DiagramNode,
+  DeepAnalysis,
   DiagramRole,
   NormalizedDesign,
   RawArchitectureInput,
@@ -174,6 +175,24 @@ function normalizeTechStackEntry(item: unknown): TechStackItem | null {
   return { layer, name, reason };
 }
 
+const EMPTY_DEEP_ANALYSIS: DeepAnalysis = {
+  tradeoffs: [],
+  failureModes: [],
+  observability: [],
+  dataConsistency: [],
+};
+
+function normalizeDeepAnalysis(raw: unknown): DeepAnalysis {
+  const o = raw as DeepAnalysis | undefined;
+  if (!o || typeof o !== "object") return { ...EMPTY_DEEP_ANALYSIS };
+  return {
+    tradeoffs: normalizeStringList(o.tradeoffs),
+    failureModes: normalizeStringList(o.failureModes),
+    observability: normalizeStringList(o.observability),
+    dataConsistency: normalizeStringList(o.dataConsistency),
+  };
+}
+
 function normalizeApiEntry(item: unknown): ApiSpec | null {
   if (typeof item === "string" && item.trim()) {
     return {
@@ -285,6 +304,28 @@ export function createFallbackDesign(prompt = "", constraints: DesignConstraints
         purpose: "Convert structured design data into markdown, PDF, or DOCX downloads.",
       },
     ],
+    deepAnalysis: {
+      tradeoffs: [
+        "Template mode trades rich scenario modeling for a predictable local preview when the AI is offline.",
+        "Generic stack hints may not match your real compliance or cloud mandate until Gemini is enabled.",
+        "Diagram roles are synthesized from labels — verify them before sharing externally.",
+      ],
+      failureModes: [
+        "Missing GEMINI_API_KEY or quota exhaustion keeps you on this template until the server is configured.",
+        "Invalid JSON from the model triggers the same fallback — check API health and prompts.",
+        "Very long prompts are truncated server-side — extreme edge cases may lose constraint detail.",
+      ],
+      observability: [
+        "Use GET /api/health to confirm database connectivity and whether an API key is configured.",
+        "Server logs include structured events for password-reset lockouts and export failures.",
+        "Client toasts indicate fallback vs live generation after each /api/generate call.",
+      ],
+      dataConsistency: [
+        "Saved designs live in PostgreSQL per authenticated user; anonymous sessions only hold UI state.",
+        "Exports use the in-memory payload you send — re-fetch from history if the record changed.",
+        "JWT token versioning invalidates older sessions after password reset for safer consistency.",
+      ],
+    },
   });
 }
 
@@ -295,6 +336,7 @@ export function normalizeDesign(raw: RawDesignInput = {}): NormalizedDesign {
   const techStack = normalizeObjectList(raw.techStack || raw.stack, normalizeTechStackEntry);
   const apis = normalizeObjectList(raw.apis, normalizeApiEntry);
   const architecture = normalizeArchitecture(raw.architecture, raw);
+  const deepAnalysis = normalizeDeepAnalysis(raw.deepAnalysis);
 
   return {
     id: normalizeText(raw.id),
@@ -312,6 +354,7 @@ export function normalizeDesign(raw: RawDesignInput = {}): NormalizedDesign {
     apis: apis.length
       ? apis
       : [{ name: "Generate Design", method: "POST", path: "/api/generate", purpose: "Create a structured system design." }],
+    deepAnalysis,
     generatedAt: normalizeText(raw.generatedAt, new Date().toISOString()),
   };
 }
@@ -410,6 +453,18 @@ export function generateMarkdown(raw: RawDesignInput = {}): string {
     "",
     "## Risks",
     ...formatBullets(design.architecture.risks, "No architecture risks available."),
+    "",
+    "## Deep analysis — trade-offs",
+    ...formatBullets(design.deepAnalysis.tradeoffs, "No trade-off analysis available."),
+    "",
+    "## Deep analysis — failure modes",
+    ...formatBullets(design.deepAnalysis.failureModes, "No failure-mode analysis available."),
+    "",
+    "## Deep analysis — observability",
+    ...formatBullets(design.deepAnalysis.observability, "No observability notes available."),
+    "",
+    "## Deep analysis — data consistency",
+    ...formatBullets(design.deepAnalysis.dataConsistency, "No consistency analysis available."),
     "",
     "## Tech Stack",
     ...(design.techStack.length
