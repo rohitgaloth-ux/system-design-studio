@@ -9,3 +9,6 @@ data/
 tmp/
 coverage/
 .vite/
+
+# Local-only tooling (not committed)
+.cursor/
