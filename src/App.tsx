@@ -5,10 +5,9 @@ import { apiUrl } from "./lib/apiBase";
 import { createFallbackDesign, generateMarkdown, hasMeaningfulDesign, normalizeDesign } from "./lib/design";
 import type { GenerationRunMeta, NormalizedDesign, RawDesignInput } from "./types/design";
 import "./index.css";
-import { JobTrackerScreen } from "./components/JobTrackerScreen";
 const DiagramCanvas = lazy(() => import("./components/DiagramCanvas"));
 const RightPanel = lazy(() => import("./components/RightPanel"));
-type Screen = "landing" | "auth" | "forgot-password" | "reset-password" | "onboarding" | "dashboard" | "jobtracker" | "newdesign" | "workspace";
+type Screen = "landing" | "auth" | "forgot-password" | "reset-password" | "onboarding" | "dashboard" | "newdesign" | "workspace";
 type ConstraintKey = "scale" | "latency" | "budget" | "region" | "security" | "customRequirements";
 interface FormState {
     prompt: string;
@@ -506,13 +505,12 @@ function HistoryCard({ entry, onOpen }: {
       </p>
     </button>);
 }
-function DashboardScreen({ user, history, onNewDesign, onOpenHistory, onLogout, onJobTracker, onDeleteDesign: _onDeleteDesign, }: {
+function DashboardScreen({ user, history, onNewDesign, onOpenHistory, onLogout, onDeleteDesign: _onDeleteDesign, }: {
     user: SessionUser;
     history: DesignHistoryEntry[];
     onNewDesign: (preset?: string) => void;
     onOpenHistory: (e: DesignHistoryEntry) => void;
     onLogout: () => void;
-    onJobTracker: () => void;
     onDeleteDesign: (id: string) => void;
 }) {
     const h = new Date().getHours();
@@ -538,9 +536,6 @@ function DashboardScreen({ user, history, onNewDesign, onOpenHistory, onLogout, 
         <div className="mt-6 flex flex-wrap gap-3">
           <button type="button" onClick={() => onNewDesign()} className="btn-outline inline-flex items-center gap-2 border px-6 py-3 text-sm font-semibold" style={{ borderColor: DARK, color: DARK }}>
             + New design
-          </button>
-          <button type="button" onClick={onJobTracker} className="btn-outline inline-flex items-center gap-2 border px-6 py-3 text-sm font-semibold" style={{ borderColor: DARK, color: DARK }}>
-            Job tracker
           </button>
         </div>
 
@@ -1577,7 +1572,7 @@ export default function App() {
     }, [design, hasDesign, recordId, toast$]);
     return (<ErrorBoundary>
       <Toast toast={toast}/>
-      {screen === "workspace" ? (<WorkspaceScreen form={form} design={design} loading={loading} exporting={exporting} hasDesign={hasDesign} showInsights={showInsights} showExportMenu={showExportMenu} metrics={metrics} user={user} designMeta={designMeta} generationMeta={generationMeta} requireAuthForAi={publicConfig.requireAuthForAi} onPromptChange={(v) => setForm((c) => ({ ...c, prompt: v }))} onConstraintChange={(k, v) => setForm((c) => ({ ...c, constraints: { ...c.constraints, [k]: v } }))} onLoadStressTest={() => { setForm(stressTestForm()); setShowInsights(true); }} onGenerate={handleGenerate} onReset={handleReset} onExport={exportFile} onToggleInsights={() => setShowInsights((v) => !v)} onToggleExportMenu={() => setShowExportMenu((v) => !v)} onCloseMenus={() => { setShowInsights(false); setShowExportMenu(false); }} onGoHome={() => setScreen(user ? "dashboard" : "landing")} onNewDesign={() => setScreen("newdesign")} onRequestSignIn={() => setScreen("auth")}/>) : screen === "newdesign" ? (<NewDesignScreen onStart={handleNewDesignStart} onBack={() => setScreen(user ? "dashboard" : "landing")}/>) : screen === "dashboard" ? (user ? (<DashboardScreen user={user} history={history} onNewDesign={handleNewDesign} onOpenHistory={handleOpenHistory} onLogout={handleLogout} onJobTracker={() => setScreen("jobtracker")} onDeleteDesign={handleDeleteDesign}/>) : null) : screen === "jobtracker" ? (user ? (<JobTrackerScreen userName={user.name} onBack={() => setScreen("dashboard")} onToast={toast$}/>) : null) : screen === "auth" ? (<AuthScreen onAuth={handleAuth} onBack={() => setScreen("landing")} initialMode="login" onForgotPassword={() => setScreen("forgot-password")}/>) : screen === "forgot-password" ? (<ForgotPasswordScreen onBack={() => setScreen("auth")} onContinueWithCode={(c) => {
+      {screen === "workspace" ? (<WorkspaceScreen form={form} design={design} loading={loading} exporting={exporting} hasDesign={hasDesign} showInsights={showInsights} showExportMenu={showExportMenu} metrics={metrics} user={user} designMeta={designMeta} generationMeta={generationMeta} requireAuthForAi={publicConfig.requireAuthForAi} onPromptChange={(v) => setForm((c) => ({ ...c, prompt: v }))} onConstraintChange={(k, v) => setForm((c) => ({ ...c, constraints: { ...c.constraints, [k]: v } }))} onLoadStressTest={() => { setForm(stressTestForm()); setShowInsights(true); }} onGenerate={handleGenerate} onReset={handleReset} onExport={exportFile} onToggleInsights={() => setShowInsights((v) => !v)} onToggleExportMenu={() => setShowExportMenu((v) => !v)} onCloseMenus={() => { setShowInsights(false); setShowExportMenu(false); }} onGoHome={() => setScreen(user ? "dashboard" : "landing")} onNewDesign={() => setScreen("newdesign")} onRequestSignIn={() => setScreen("auth")}/>) : screen === "newdesign" ? (<NewDesignScreen onStart={handleNewDesignStart} onBack={() => setScreen(user ? "dashboard" : "landing")}/>) : screen === "dashboard" ? (user ? (<DashboardScreen user={user} history={history} onNewDesign={handleNewDesign} onOpenHistory={handleOpenHistory} onLogout={handleLogout} onDeleteDesign={handleDeleteDesign}/>) : null) : screen === "auth" ? (<AuthScreen onAuth={handleAuth} onBack={() => setScreen("landing")} initialMode="login" onForgotPassword={() => setScreen("forgot-password")}/>) : screen === "forgot-password" ? (<ForgotPasswordScreen onBack={() => setScreen("auth")} onContinueWithCode={(c) => {
                 setResetPasswordCode(c);
                 setScreen("reset-password");
             }}/>) : screen === "reset-password" ? (<ResetPasswordScreen code={resetPasswordCode} onCodeChange={setResetPasswordCode} onBack={() => {

@@ -1,25 +1,10 @@
 # System Design Studio
 
-Full-stack workspace for **two** connected experiences, both backed by the same **Node** API, **PostgreSQL**, and optional **Google Gemini**:
+Describe a product idea plus **constraints** (scale, latency, budget, region, security, custom notes). The app calls **`/api/generate`** to produce a **normalized design**: functional and non-functional requirements, architecture (summary, flow, components, decisions, risks), an **interactive diagram** (nodes and edges by role), **tech stack** with rationale, **API specs**, and **deep analysis** (trade-offs, failure modes, observability, data consistency).
 
-### 1. Architecture generator (main product)
+Designs can be **saved** per user in **PostgreSQL**, **reopened**, and **exported** as **PDF**, **Word (.docx)**, or **Markdown** (with **Mermaid**). Optional **Google Gemini** powers generation; without it, the server returns a **structured fallback** template.
 
-You describe a product idea plus **constraints** (scale, latency, budget, region, security, custom notes). The app calls **`/api/generate`** to produce a **normalized design** document:
-
-- **Requirements** — functional and non-functional lists  
-- **Architecture** — summary, end-to-end flow, core components, key decisions, risks  
-- **Diagram** — interactive canvas: nodes (client, services, DB, cache, queues, etc.) and labeled edges  
-- **Tech stack** — per-layer choices with **why** each fits  
-- **API surface** — named endpoints with method, path, and purpose  
-- **Deep analysis** — trade-offs, failure modes, observability, data-consistency notes  
-
-Designs can be **saved** (per-user history in Postgres), **reopened**, and **exported** server-side as **PDF** (diagram included), **Word (.docx)**, or **Markdown** (with **Mermaid** for the diagram). Without Gemini, the server can still return a **structured fallback** template.
-
-### 2. Job search copilot (same app, signed-in users)
-
-A **job application tracker**: pipeline statuses (e.g. interested → applied → interview → offer/rejected), notes, optional job URLs, and timeline-style **updates**. The API also exposes **AI-assisted** flows when **`GEMINI_API_KEY`** is set: **resume tailoring** against a job description and a **resume–job match score** (rate-limited). Automation-related state is stored per application for workflow tooling (see UI: **Job tracker** / automation views).
-
-**Frontend:** **React 19**, **TypeScript**, **Tailwind CSS v4**, **Vite 7**. **Auth:** sign up / sign in, JWT sessions, password reset (email code when mail is configured).
+**Stack:** **React 19**, **TypeScript**, **Tailwind CSS v4**, **Vite 7** frontend; **Node** HTTP API; **PostgreSQL**; **JWT** auth, sign up / sign in, password reset (email when configured).
 
 ## Quick start
 
@@ -50,7 +35,7 @@ App: **http://localhost:4173** (or `PORT`).
 
 ## Environment
 
-Copy **`.env.example`** → **`.env`**. Required for real use: **`DATABASE_URL`**, **`JWT_SECRET`** (production). Optional: **`GEMINI_API_KEY`**, email/SMTP for password reset, **`ALLOWED_ORIGIN`** / **`APP_PUBLIC_URL`** for production CORS and links. Full table and behaviour are documented in `.env.example` comments where applicable.
+Copy **`.env.example`** → **`.env`**. Required for real use: **`DATABASE_URL`**, **`JWT_SECRET`** (production). Optional: **`GEMINI_API_KEY`**, email/SMTP for password reset, **`ALLOWED_ORIGIN`** / **`APP_PUBLIC_URL`** for production CORS and links.
 
 ## Deploy (short)
 
