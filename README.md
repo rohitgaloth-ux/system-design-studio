@@ -1,6 +1,25 @@
 # System Design Studio
 
-Turn a product idea into structured system architecture — requirements, components, APIs, stack rationale, and an interactive diagram. **React + TypeScript** (Vite), **Node** API, **PostgreSQL**, optional **Gemini**; exports **PDF**, **Word**, and **Markdown** (with Mermaid).
+Full-stack workspace for **two** connected experiences, both backed by the same **Node** API, **PostgreSQL**, and optional **Google Gemini**:
+
+### 1. Architecture generator (main product)
+
+You describe a product idea plus **constraints** (scale, latency, budget, region, security, custom notes). The app calls **`/api/generate`** to produce a **normalized design** document:
+
+- **Requirements** — functional and non-functional lists  
+- **Architecture** — summary, end-to-end flow, core components, key decisions, risks  
+- **Diagram** — interactive canvas: nodes (client, services, DB, cache, queues, etc.) and labeled edges  
+- **Tech stack** — per-layer choices with **why** each fits  
+- **API surface** — named endpoints with method, path, and purpose  
+- **Deep analysis** — trade-offs, failure modes, observability, data-consistency notes  
+
+Designs can be **saved** (per-user history in Postgres), **reopened**, and **exported** server-side as **PDF** (diagram included), **Word (.docx)**, or **Markdown** (with **Mermaid** for the diagram). Without Gemini, the server can still return a **structured fallback** template.
+
+### 2. Job search copilot (same app, signed-in users)
+
+A **job application tracker**: pipeline statuses (e.g. interested → applied → interview → offer/rejected), notes, optional job URLs, and timeline-style **updates**. The API also exposes **AI-assisted** flows when **`GEMINI_API_KEY`** is set: **resume tailoring** against a job description and a **resume–job match score** (rate-limited). Automation-related state is stored per application for workflow tooling (see UI: **Job tracker** / automation views).
+
+**Frontend:** **React 19**, **TypeScript**, **Tailwind CSS v4**, **Vite 7**. **Auth:** sign up / sign in, JWT sessions, password reset (email code when mail is configured).
 
 ## Quick start
 
